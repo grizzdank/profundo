@@ -9,6 +9,7 @@ pub mod harvest;
 pub mod openrouter;
 pub mod recall;
 pub mod session;
+pub mod stats;
 
 use std::path::PathBuf;
 

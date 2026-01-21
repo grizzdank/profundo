@@ -77,6 +77,17 @@ enum Commands {
     /// Show memory status
     Status,
 
+    /// Show token usage statistics
+    Stats {
+        /// Only include sessions since this date (YYYY-MM-DD)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Only include sessions until this date (YYYY-MM-DD)
+        #[arg(long)]
+        until: Option<String>,
+    },
+
     /// Search extracted learnings
     Learnings {
         /// Search query (searches topics, summaries, facts)
@@ -159,6 +170,26 @@ async fn main() -> Result<()> {
             );
 
             show_status(&paths)?;
+        }
+
+        Commands::Stats { since, until } => {
+            let since_date = since
+                .map(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d"))
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("Invalid since date: {}", e))?;
+
+            let until_date = until
+                .map(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d"))
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("Invalid until date: {}", e))?;
+
+            let config = profundo::stats::StatsConfig {
+                since: since_date,
+                until: until_date,
+            };
+
+            let stats = profundo::stats::collect(&paths, config)?;
+            profundo::stats::display(&stats);
         }
 
         Commands::Learnings { query, last } => {

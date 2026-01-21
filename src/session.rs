@@ -22,6 +22,7 @@ pub struct SessionMessage {
 pub struct MessageContent {
     pub role: Option<String>,
     pub content: Option<Vec<ContentBlock>>,
+    pub model: Option<String>,
     pub usage: Option<Usage>,
 }
 
@@ -49,12 +50,60 @@ pub enum ContentBlock {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usage {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    #[serde(rename = "cacheRead")]
+    pub cache_read: Option<u64>,
+    #[serde(rename = "cacheWrite")]
+    pub cache_write: Option<u64>,
+    #[serde(rename = "totalTokens")]
+    pub total_tokens: Option<u64>,
     pub cost: Option<Cost>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cost {
+    pub input: Option<f64>,
+    pub output: Option<f64>,
+    #[serde(rename = "cacheRead")]
+    pub cache_read: Option<f64>,
+    #[serde(rename = "cacheWrite")]
+    pub cache_write: Option<f64>,
     pub total: Option<f64>,
+}
+
+/// Aggregated token statistics
+#[derive(Debug, Clone, Default)]
+pub struct TokenStats {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub total_tokens: u64,
+    pub input_cost: f64,
+    pub output_cost: f64,
+    pub cache_read_cost: f64,
+    pub cache_write_cost: f64,
+    pub total_cost: f64,
+    pub message_count: usize,
+}
+
+impl TokenStats {
+    pub fn cache_hit_rate(&self) -> f64 {
+        let total_input = self.input_tokens + self.cache_read_tokens;
+        if total_input == 0 {
+            0.0
+        } else {
+            self.cache_read_tokens as f64 / total_input as f64
+        }
+    }
+}
+
+/// Model usage statistics
+#[derive(Debug, Clone, Default)]
+pub struct ModelStats {
+    pub model: String,
+    pub stats: TokenStats,
 }
 
 /// A parsed session with metadata
@@ -66,6 +115,8 @@ pub struct Session {
     pub last_timestamp: Option<DateTime<Utc>>,
     pub total_cost: f64,
     pub message_count: usize,
+    pub token_stats: TokenStats,
+    pub models_used: Vec<String>,
 }
 
 impl Session {
@@ -82,6 +133,8 @@ impl Session {
 
         let mut messages = Vec::new();
         let mut total_cost = 0.0;
+        let mut token_stats = TokenStats::default();
+        let mut models_used = std::collections::HashSet::new();
 
         for line in reader.lines() {
             let line = line.context("Failed to read line")?;
@@ -91,13 +144,29 @@ impl Session {
 
             match serde_json::from_str::<SessionMessage>(&line) {
                 Ok(msg) => {
-                    // Accumulate cost
+                    // Accumulate stats from assistant messages
                     if let Some(ref content) = msg.message {
+                        // Track model
+                        if let Some(ref model) = content.model {
+                            models_used.insert(model.clone());
+                        }
+
+                        // Accumulate token usage
                         if let Some(ref usage) = content.usage {
+                            token_stats.input_tokens += usage.input.unwrap_or(0);
+                            token_stats.output_tokens += usage.output.unwrap_or(0);
+                            token_stats.cache_read_tokens += usage.cache_read.unwrap_or(0);
+                            token_stats.cache_write_tokens += usage.cache_write.unwrap_or(0);
+                            token_stats.total_tokens += usage.total_tokens.unwrap_or(0);
+                            token_stats.message_count += 1;
+
                             if let Some(ref cost) = usage.cost {
-                                if let Some(c) = cost.total {
-                                    total_cost += c;
-                                }
+                                token_stats.input_cost += cost.input.unwrap_or(0.0);
+                                token_stats.output_cost += cost.output.unwrap_or(0.0);
+                                token_stats.cache_read_cost += cost.cache_read.unwrap_or(0.0);
+                                token_stats.cache_write_cost += cost.cache_write.unwrap_or(0.0);
+                                token_stats.total_cost += cost.total.unwrap_or(0.0);
+                                total_cost += cost.total.unwrap_or(0.0);
                             }
                         }
                     }
@@ -134,6 +203,8 @@ impl Session {
             last_timestamp,
             total_cost,
             message_count,
+            token_stats,
+            models_used: models_used.into_iter().collect(),
         })
     }
 
