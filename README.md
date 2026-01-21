@@ -104,6 +104,11 @@ Profundo reads the workspace path from your Clawdbot config (`~/.clawdbot/clawdb
 2. Uses AI (DeepSeek V3.2 by default) to extract structured learnings
 3. Appends to `learnings.jsonl`
 
+### Stats & Cost Tracking
+Token usage and costs are read directly from Clawdbot's session logs — not calculated with hardcoded rates. Clawdbot logs costs based on API pricing at the time of each request.
+
+**OAuth users:** If you're using Anthropic OAuth (usage limits instead of per-token billing), the costs shown represent *equivalent API rates*, not actual charges. This is still useful for understanding relative usage and cost efficiency across models.
+
 ## Cost
 
 - Embeddings: ~$0.02 per 1M tokens (very cheap)
