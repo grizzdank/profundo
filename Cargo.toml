@@ -1,0 +1,50 @@
+[package]
+name = "profundo"
+version = "0.1.0"
+edition = "2021"
+description = "Memory system for Pulpito - semantic search and learning extraction from session logs"
+authors = ["Dave Graham"]
+repository = "https://github.com/grizzdank/profundo"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# JSON
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# SQLite
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Vector math
+ndarray = "0.16"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# UUID for chunk IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Directory walking
+walkdir = "2"
+
+# Progress bars
+indicatif = "0.17"
+
+# Colored output
+colored = "2"
+
+[profile.release]
+lto = true
+strip = true
