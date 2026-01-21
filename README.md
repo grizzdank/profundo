@@ -10,6 +10,8 @@ Named for "the deep" (Spanish: *profundo*) - where memories sink and are retriev
 - **Recall**: Search past conversations by meaning, not just keywords
 - **Harvest**: Extract learnings (topics, decisions, facts, action items) using AI
 - **Learnings**: Browse and search extracted insights
+- **Export**: Write learnings to markdown for Clawdbot indexing
+- **Rollup**: Daily summary appended to memory logs (learnings + stats)
 - **Stats**: Token usage analytics with per-model breakdown, cache efficiency, and cost trends
 
 ## Installation
@@ -65,6 +67,18 @@ profundo learnings
 # Search learnings
 profundo learnings "decisions about infrastructure"
 
+# Export learnings to markdown (for Clawdbot indexing)
+profundo export
+
+# Export to custom path
+profundo export -o ~/clawd/memory/insights.md
+
+# Write daily rollup to memory log (defaults to yesterday)
+profundo rollup
+
+# Rollup for a specific date
+profundo rollup --date 2026-01-20
+
 # Show status
 profundo status
 
@@ -82,7 +96,9 @@ Profundo reads the workspace path from your Clawdbot config (`~/.clawdbot/clawdb
 ```
 ~/<workspace>/memory/
 ├── profundo.sqlite    # Embeddings database
-├── learnings.jsonl    # Extracted insights
+├── learnings.jsonl    # Extracted insights (internal)
+├── learnings.md       # Exported markdown (Clawdbot can index)
+├── YYYY-MM-DD.md      # Daily logs with ## Profundo sections
 └── .profundo-cursor   # Processing state
 ```
 
@@ -118,12 +134,20 @@ Token usage and costs are read directly from Clawdbot's session logs — not cal
 
 ```bash
 # Add to crontab for automatic processing
+
 # Embed new sessions hourly
 0 * * * * OPENROUTER_API_KEY=... /path/to/profundo embed
 
-# Harvest learnings at 5:30am before morning review
-30 5 * * * OPENROUTER_API_KEY=... /path/to/profundo harvest --since $(date -d yesterday +%Y-%m-%d)
+# Harvest learnings at 5:00am
+0 5 * * * OPENROUTER_API_KEY=... /path/to/profundo harvest --since $(date -d yesterday +%Y-%m-%d)
+
+# Daily rollup at 5:15am (after harvest, before morning review)
+15 5 * * * /path/to/profundo rollup
 ```
+
+The rollup command writes a `## Profundo` section to yesterday's daily log with:
+- Token usage stats (input/output, cache rate, cost)
+- Harvested learnings (topics, decisions, facts, action items)
 
 ## Integration with Clawdbot
 
@@ -133,6 +157,8 @@ Add to your workspace's `TOOLS.md`:
 
 - `profundo recall "query"` - Semantic search of past conversations
 - `profundo learnings "query"` - Search extracted insights
+- `profundo export` - Export learnings to markdown (overwrites learnings.md)
+- `profundo rollup` - Append daily summary to memory log
 - `profundo status` - Show memory system status
 - `profundo stats` - Token usage and cost analytics
 ```

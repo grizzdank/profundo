@@ -5,6 +5,7 @@
 
 pub mod db;
 pub mod embed;
+pub mod export;
 pub mod harvest;
 pub mod openrouter;
 pub mod recall;

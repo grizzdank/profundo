@@ -97,6 +97,20 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "10")]
         last: usize,
     },
+
+    /// Export learnings to markdown for Clawdbot indexing
+    Export {
+        /// Output file path (default: memory/learnings.md)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Write daily rollup to memory log (learnings + stats)
+    Rollup {
+        /// Date to rollup (YYYY-MM-DD, default: yesterday)
+        #[arg(long)]
+        date: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -194,6 +208,66 @@ async fn main() -> Result<()> {
 
         Commands::Learnings { query, last } => {
             show_learnings(&paths, query.as_deref(), last)?;
+        }
+
+        Commands::Export { output } => {
+            println!(
+                "\n{} Profundo Export\n",
+                "🌊".to_string()
+            );
+
+            let output_path = output.unwrap_or_else(|| paths.memory_dir.join("learnings.md"));
+
+            let stats = profundo::export::export_to_markdown(&paths, &output_path)?;
+
+            if stats.sessions == 0 {
+                println!(
+                    "{} No learnings to export. Run {} first.",
+                    "→".yellow(),
+                    "profundo harvest".cyan()
+                );
+            } else {
+                println!(
+                    "{} Exported {} sessions to {}",
+                    "✓".green(),
+                    stats.sessions.to_string().cyan(),
+                    output_path.display().to_string().dimmed()
+                );
+                println!(
+                    "  {} decisions, {} facts, {} action items",
+                    stats.decisions.to_string().cyan(),
+                    stats.facts.to_string().cyan(),
+                    stats.actions.to_string().cyan()
+                );
+            }
+        }
+
+        Commands::Rollup { date } => {
+            println!(
+                "\n{} Profundo Rollup\n",
+                "🌊".to_string()
+            );
+
+            // Default to yesterday (for morning review of previous day)
+            let target_date = match date {
+                Some(d) => NaiveDate::parse_from_str(&d, "%Y-%m-%d")
+                    .map_err(|e| anyhow::anyhow!("Invalid date format: {}", e))?,
+                None => chrono::Utc::now().date_naive() - chrono::Duration::days(1),
+            };
+
+            let stats = profundo::export::write_rollup(&paths, target_date)?;
+
+            println!(
+                "{} Wrote rollup for {} to {}",
+                "✓".green(),
+                target_date.to_string().cyan(),
+                stats.path.display().to_string().dimmed()
+            );
+            println!(
+                "  {} learnings from {} sessions",
+                stats.sessions.to_string().cyan(),
+                stats.stats_sessions.to_string().cyan()
+            );
         }
     }
 

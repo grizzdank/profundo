@@ -145,6 +145,30 @@ pub async fn run(paths: &Paths, config: HarvestConfig) -> Result<HarvestStats> {
     Ok(stats)
 }
 
+/// Strip markdown code fences from LLM response
+/// Handles ```json ... ``` and ``` ... ``` patterns
+fn strip_markdown_json(response: &str) -> String {
+    let trimmed = response.trim();
+
+    // Check for ```json or ``` at start
+    let without_prefix = if trimmed.starts_with("```json") {
+        trimmed.strip_prefix("```json").unwrap_or(trimmed)
+    } else if trimmed.starts_with("```") {
+        trimmed.strip_prefix("```").unwrap_or(trimmed)
+    } else {
+        trimmed
+    };
+
+    // Check for ``` at end
+    let without_suffix = if without_prefix.trim_end().ends_with("```") {
+        without_prefix.trim_end().strip_suffix("```").unwrap_or(without_prefix)
+    } else {
+        without_prefix
+    };
+
+    without_suffix.trim().to_string()
+}
+
 /// Harvest a single session
 async fn harvest_session(
     client: &OpenRouterClient,
@@ -177,8 +201,9 @@ async fn harvest_session(
               &config.model)
         .await?;
 
-    // Parse response as JSON
-    let extracted: ExtractedLearning = serde_json::from_str(&response)
+    // Parse response as JSON (strip markdown code fences if present)
+    let json_str = strip_markdown_json(&response);
+    let extracted: ExtractedLearning = serde_json::from_str(&json_str)
         .context("Failed to parse AI response as JSON")?;
 
     let date = session
@@ -284,9 +309,11 @@ fn discover_sessions_for_harvest(
     {
         let path = entry.path();
 
-        // Only .jsonl files, not deleted
+        // Only .jsonl files, not deleted, not macOS resource forks
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if !path.extension().map(|e| e == "jsonl").unwrap_or(false)
             || path.to_str().map(|s| s.contains(".deleted")).unwrap_or(false)
+            || filename.starts_with("._")
         {
             continue;
         }
