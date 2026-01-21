@@ -1,7 +1,7 @@
-//! Profundo - Memory system for Pulpito
+//! Profundo - Memory system for Clawdbot
 //!
 //! Semantic search and learning extraction from Clawdbot session logs.
-//! Named for "the deep" - where memories sink and are retrieved from.
+//! Named for "the deep" (Spanish: profundo) - where memories sink and are retrieved from.
 
 pub mod db;
 pub mod embed;
@@ -13,11 +13,11 @@ pub mod stats;
 
 use std::path::PathBuf;
 
-/// Default paths for Clawdbot/Pulpito integration
+/// Default paths for Clawdbot integration
 pub struct Paths {
     /// Where Clawdbot stores session logs
     pub sessions_dir: PathBuf,
-    /// Where Pulpito's memory lives
+    /// Where the workspace memory lives
     pub memory_dir: PathBuf,
     /// Profundo's SQLite database
     pub db_path: PathBuf,
@@ -30,16 +30,36 @@ pub struct Paths {
 impl Default for Paths {
     fn default() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let home = PathBuf::from(home);
+        let home = PathBuf::from(&home);
+
+        // Read workspace from clawdbot.json, fall back to ~/pulpito
+        let workspace = read_clawdbot_workspace(&home)
+            .unwrap_or_else(|| home.join("pulpito"));
+
+        let memory_dir = workspace.join("memory");
 
         Self {
             sessions_dir: home.join(".clawdbot/agents/main/sessions"),
-            memory_dir: home.join("pulpito/memory"),
-            db_path: home.join("pulpito/memory/profundo.sqlite"),
-            learnings_path: home.join("pulpito/memory/learnings.jsonl"),
-            cursor_path: home.join("pulpito/memory/.profundo-cursor"),
+            db_path: memory_dir.join("profundo.sqlite"),
+            learnings_path: memory_dir.join("learnings.jsonl"),
+            cursor_path: memory_dir.join(".profundo-cursor"),
+            memory_dir,
         }
     }
+}
+
+/// Read workspace path from clawdbot.json
+fn read_clawdbot_workspace(home: &PathBuf) -> Option<PathBuf> {
+    let config_path = home.join(".clawdbot/clawdbot.json");
+    let content = std::fs::read_to_string(&config_path).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    config
+        .get("agents")
+        .and_then(|a| a.get("defaults"))
+        .and_then(|d| d.get("workspace"))
+        .and_then(|w| w.as_str())
+        .map(PathBuf::from)
 }
 
 impl Paths {
