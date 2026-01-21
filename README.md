@@ -10,6 +10,7 @@ Named for "the deep" (Spanish: *profundo*) - where memories sink and are retriev
 - **Recall**: Search past conversations by meaning, not just keywords
 - **Harvest**: Extract learnings (topics, decisions, facts, action items) using AI
 - **Learnings**: Browse and search extracted insights
+- **Stats**: Token usage analytics with per-model breakdown, cache efficiency, and cost trends
 
 ## Installation
 
@@ -66,6 +67,12 @@ profundo learnings "decisions about infrastructure"
 
 # Show status
 profundo status
+
+# Token usage statistics
+profundo stats
+
+# Stats for a specific date range
+profundo stats --since 2026-01-01 --until 2026-01-15
 ```
 
 ## Directory Structure
@@ -120,4 +127,5 @@ Add to `~/pulpito/TOOLS.md`:
 - `profundo recall "query"` - Semantic search of past conversations
 - `profundo learnings "query"` - Search extracted insights
 - `profundo status` - Show memory system status
+- `profundo stats` - Token usage and cost analytics
 ```
