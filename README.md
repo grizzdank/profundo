@@ -1,6 +1,6 @@
 # Profundo
 
-Memory system for Pulpito - semantic search and learning extraction from Clawdbot session logs.
+Memory system for Clawdbot - semantic search and learning extraction from session logs.
 
 Named for "the deep" (Spanish: *profundo*) - where memories sink and are retrieved from.
 
@@ -77,8 +77,10 @@ profundo stats --since 2026-01-01 --until 2026-01-15
 
 ## Directory Structure
 
+Profundo reads the workspace path from your Clawdbot config (`~/.clawdbot/clawdbot.json` → `agents.defaults.workspace`). If not configured, it defaults to `~/clawd`.
+
 ```
-~/pulpito/memory/
+~/<workspace>/memory/
 ├── profundo.sqlite    # Embeddings database
 ├── learnings.jsonl    # Extracted insights
 └── .profundo-cursor   # Processing state
@@ -118,9 +120,9 @@ profundo stats --since 2026-01-01 --until 2026-01-15
 30 5 * * * OPENROUTER_API_KEY=... /path/to/profundo harvest --since $(date -d yesterday +%Y-%m-%d)
 ```
 
-## Integration with Pulpito
+## Integration with Clawdbot
 
-Add to `~/pulpito/TOOLS.md`:
+Add to your workspace's `TOOLS.md`:
 ```markdown
 ## Memory Tools
 

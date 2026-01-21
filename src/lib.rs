@@ -32,9 +32,9 @@ impl Default for Paths {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let home = PathBuf::from(&home);
 
-        // Read workspace from clawdbot.json, fall back to ~/pulpito
+        // Read workspace from clawdbot.json, fall back to ~/clawd (Clawdbot default)
         let workspace = read_clawdbot_workspace(&home)
-            .unwrap_or_else(|| home.join("pulpito"));
+            .unwrap_or_else(|| home.join("clawd"));
 
         let memory_dir = workspace.join("memory");
 
