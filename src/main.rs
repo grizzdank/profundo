@@ -395,6 +395,9 @@ fn show_learnings(paths: &Paths, query: Option<&str>, last: usize) -> Result<()>
                 || l.decisions
                     .iter()
                     .any(|d| d.to_lowercase().contains(&q_lower))
+                || l.action_items
+                    .iter()
+                    .any(|a| a.to_lowercase().contains(&q_lower))
         });
     }
 
