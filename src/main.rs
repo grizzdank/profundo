@@ -57,6 +57,14 @@ enum Commands {
         /// Minimum similarity threshold (0.0 - 1.0)
         #[arg(short, long, default_value = "0.3")]
         threshold: f32,
+
+        /// Show full chunk text instead of truncating
+        #[arg(long)]
+        full: bool,
+
+        /// Show N surrounding turns from the original session
+        #[arg(long, conflicts_with = "full")]
+        context: Option<usize>,
     },
 
     /// Extract learnings from sessions
@@ -147,14 +155,18 @@ async fn main() -> Result<()> {
             query,
             top_k,
             threshold,
+            full,
+            context,
         } => {
             let config = profundo::recall::RecallConfig {
                 top_k,
                 threshold,
                 semantic_only: false,
+                show_full: full,
+                context_turns: context,
             };
-            let results = profundo::recall::search(&paths, &query, config).await?;
-            profundo::recall::display_results(&results, &query);
+            let results = profundo::recall::search(&paths, &query, config.clone()).await?;
+            profundo::recall::display_results(&paths, &results, &query, &config);
         }
 
         Commands::Harvest {

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use crate::db::{Database, StoredChunk};
 use crate::openrouter::OpenRouterClient;
+use crate::session::Session;
 use crate::Paths;
 
 /// Search result with similarity score
@@ -18,6 +19,7 @@ pub struct SearchResult {
 }
 
 /// Configuration for recall search
+#[derive(Clone, Debug)]
 pub struct RecallConfig {
     /// Number of results to return
     pub top_k: usize,
@@ -26,6 +28,9 @@ pub struct RecallConfig {
     /// If true, skip lexical search and use pure semantic recall.
     /// Not exposed via CLI; can be toggled via PROFUNDO_SEMANTIC_ONLY=1.
     pub semantic_only: bool,
+    /// specific display options
+    pub show_full: bool,
+    pub context_turns: Option<usize>,
 }
 
 impl Default for RecallConfig {
@@ -34,6 +39,8 @@ impl Default for RecallConfig {
             top_k: 5,
             threshold: 0.3,
             semantic_only: false,
+            show_full: false,
+            context_turns: None,
         }
     }
 }
@@ -173,7 +180,7 @@ fn hybrid_search(
 }
 
 /// Display search results in a nice format
-pub fn display_results(results: &[SearchResult], query: &str) {
+pub fn display_results(paths: &Paths, results: &[SearchResult], query: &str, config: &RecallConfig) {
     if results.is_empty() {
         println!(
             "{} No results found for: {}",
@@ -215,13 +222,38 @@ pub fn display_results(results: &[SearchResult], query: &str) {
             similarity_color
         );
 
-        // Truncate and display text preview
-        let preview = truncate_text(&result.chunk.text, 300);
-        for line in preview.lines().take(6) {
-            println!("   {}", line.dimmed());
-        }
-        if result.chunk.text.lines().count() > 6 {
-            println!("   {}", "...".dimmed());
+        if let Some(context) = config.context_turns {
+            let session_path = paths.sessions_dir.join(format!("{}.jsonl", result.chunk.session_id));
+            if session_path.exists() {
+                match Session::load_turn_range(
+                    &session_path, 
+                    result.chunk.turn_start.try_into().unwrap_or(0), 
+                    result.chunk.turn_end.try_into().unwrap_or(0), 
+                    context
+                ) {
+                    Ok(text) => {
+                        println!("{}", text);
+                    },
+                    Err(e) => {
+                        println!("   {}: {}", "Error loading context".red(), e);
+                        println!("{}", result.chunk.text);
+                    }
+                }
+            } else {
+                println!("   {}: Session file not found, showing saved chunk.", "Warning".yellow());
+                println!("{}", result.chunk.text);
+            }
+        } else if config.show_full {
+            println!("{}", result.chunk.text);
+        } else {
+            // Truncate and display text preview
+            let preview = truncate_text(&result.chunk.text, 300);
+            for line in preview.lines().take(6) {
+                println!("   {}", line.dimmed());
+            }
+            if result.chunk.text.lines().count() > 6 || result.chunk.text.len() > 300 {
+                println!("   {}", "...".dimmed());
+            }
         }
 
         println!();

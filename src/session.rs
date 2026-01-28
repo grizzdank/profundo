@@ -212,7 +212,43 @@ impl Session {
     pub fn extract_text_chunks(&self, chunk_size: usize, overlap: usize) -> Vec<TextChunk> {
         let mut chunks = Vec::new();
 
-        // Collect conversation turns (user message + assistant response)
+        // Collect conversation turns
+        let turns = self.get_turns();
+
+        // Create chunks with sliding window
+        let step = chunk_size.saturating_sub(overlap).max(1);
+        for i in (0..turns.len()).step_by(step) {
+            let end = (i + chunk_size).min(turns.len());
+            let chunk_turns = &turns[i..end];
+
+            if chunk_turns.is_empty() {
+                continue;
+            }
+
+            let text = chunk_turns
+                .iter()
+                .map(|t| format!("User: {}\n\nAssistant: {}", t.user_text, t.assistant_text))
+                .collect::<Vec<_>>()
+                .join("\n\n---\n\n");
+
+            let timestamp = chunk_turns
+                .first()
+                .and_then(|t| t.timestamp.clone());
+
+            chunks.push(TextChunk {
+                session_id: self.id.clone(),
+                turn_start: i,
+                turn_end: end,
+                timestamp,
+                text,
+            });
+        }
+
+        chunks
+    }
+
+    /// Get all conversation turns from the session
+    pub fn get_turns(&self) -> Vec<Turn> {
         let mut turns: Vec<Turn> = Vec::new();
         let mut current_turn: Option<Turn> = None;
 
@@ -263,36 +299,30 @@ impl Session {
             turns.push(turn);
         }
 
-        // Create chunks with sliding window
-        let step = chunk_size.saturating_sub(overlap).max(1);
-        for i in (0..turns.len()).step_by(step) {
-            let end = (i + chunk_size).min(turns.len());
-            let chunk_turns = &turns[i..end];
+        turns
+    }
 
-            if chunk_turns.is_empty() {
-                continue;
-            }
+    /// Load specified range of turns from a session file, with padding
+    pub fn load_turn_range(path: &Path, start_idx: usize, end_idx: usize, padding: usize) -> Result<String> {
+        let session = Self::from_file(path)?;
+        let turns = session.get_turns();
 
-            let text = chunk_turns
-                .iter()
-                .map(|t| format!("User: {}\n\nAssistant: {}", t.user_text, t.assistant_text))
-                .collect::<Vec<_>>()
-                .join("\n\n---\n\n");
+        let start = start_idx.saturating_sub(padding);
+        let end = (end_idx + padding).min(turns.len());
 
-            let timestamp = chunk_turns
-                .first()
-                .and_then(|t| t.timestamp.clone());
-
-            chunks.push(TextChunk {
-                session_id: self.id.clone(),
-                turn_start: i,
-                turn_end: end,
-                timestamp,
-                text,
-            });
+        if start >= turns.len() {
+            return Ok(String::new());
         }
 
-        chunks
+        let slice = &turns[start..end];
+
+        let text = slice
+            .iter()
+            .map(|t| format!("User: {}\n\nAssistant: {}", t.user_text, t.assistant_text))
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+
+        Ok(text)
     }
 
     fn extract_text_from_content(content: &MessageContent) -> String {
@@ -312,10 +342,10 @@ impl Session {
 }
 
 #[derive(Debug)]
-struct Turn {
-    user_text: String,
-    assistant_text: String,
-    timestamp: Option<String>,
+pub struct Turn {
+    pub user_text: String,
+    pub assistant_text: String,
+    pub timestamp: Option<String>,
 }
 
 /// A chunk of text extracted from a session for embedding
