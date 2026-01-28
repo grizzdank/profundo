@@ -32,6 +32,8 @@ pub struct RecallConfig {
     /// specific display options
     pub show_full: bool,
     pub context_turns: Option<usize>,
+    /// Use LLM to expand query with synonyms/variants before searching
+    pub expand: bool,
 }
 
 impl Default for RecallConfig {
@@ -42,6 +44,36 @@ impl Default for RecallConfig {
             semantic_only: false,
             show_full: false,
             context_turns: None,
+            expand: false,
+        }
+    }
+}
+
+/// Expand a query using LLM to generate synonyms/variants
+async fn expand_query(client: &OpenRouterClient, query: &str) -> Result<Vec<String>> {
+    let system_prompt = "You generate alternative search queries. Return only the queries, one per line. No explanations, no numbering.";
+    let user_prompt = format!(
+        "Generate 2 alternative search queries for: {}\n\nReturn only the queries, one per line.",
+        query
+    );
+
+    // Use a cheap, fast model for query expansion
+    let model = "deepseek/deepseek-chat";
+
+    match client.chat(system_prompt, &user_prompt, model).await {
+        Ok(response) => {
+            let variants: Vec<String> = response
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .take(2)
+                .map(|s| s.to_string())
+                .collect();
+            Ok(variants)
+        }
+        Err(e) => {
+            eprintln!("  {} Query expansion failed: {}", "⚠".yellow(), e);
+            Ok(Vec::new())
         }
     }
 }
@@ -55,7 +87,21 @@ pub async fn search(paths: &Paths, query: &str, mut config: RecallConfig) -> Res
     let client = OpenRouterClient::from_env()?;
     let db = Database::open(&paths.db_path)?;
 
-    // Embed the query
+    // Optionally expand the query with LLM-generated variants
+    let queries: Vec<String> = if config.expand {
+        let mut all_queries = vec![query.to_string()];
+        eprintln!("  {} Expanding query...", "→".blue());
+        let variants = expand_query(&client, query).await?;
+        if !variants.is_empty() {
+            eprintln!("  {} Variants: {}", "✓".green(), variants.join(", "));
+        }
+        all_queries.extend(variants);
+        all_queries
+    } else {
+        vec![query.to_string()]
+    };
+
+    // Embed the primary query for semantic scoring
     let query_embedding = client.embed(query).await?;
 
     if config.semantic_only {
@@ -67,7 +113,7 @@ pub async fn search(paths: &Paths, query: &str, mut config: RecallConfig) -> Res
         return semantic_only_search(chunks, &query_embedding, config);
     }
 
-    hybrid_search(&db, &query_embedding, query, config)
+    hybrid_search_expanded(&db, &query_embedding, &queries, config)
 }
 
 fn semantic_only_search(
@@ -89,23 +135,40 @@ fn semantic_only_search(
     Ok(results)
 }
 
-/// BM25-first hybrid search.
+/// BM25-first hybrid search with multiple query variants.
 ///
-/// Instead of loading all chunks for brute-force cosine similarity,
-/// we use BM25 to get a candidate set, then only load embeddings for
-/// those candidates. This is O(candidate_pool) instead of O(all_chunks).
-///
-/// At 1,400 chunks this doesn't matter much; at 50k+ it's the difference
-/// between instant and sluggish.
-fn hybrid_search(
+/// Runs BM25 for each query variant and merges candidate pools before
+/// semantic scoring. This allows query expansion to find results that
+/// match synonyms/variants of the original query.
+fn hybrid_search_expanded(
     db: &Database,
     query_embedding: &[f32],
-    query: &str,
+    queries: &[String],
     config: RecallConfig,
 ) -> Result<Vec<SearchResult>> {
-    // BM25 candidate pool — cast a wide net
-    let candidate_pool_size = (config.top_k * 40).max(200);
-    let lexical = db.bm25_search(query, candidate_pool_size).unwrap_or_default();
+    // BM25 candidate pool — cast a wide net, per query
+    let candidate_pool_size_per_query = (config.top_k * 40).max(200);
+
+    // Merge BM25 results from all query variants
+    let mut all_bm25: HashMap<i64, f32> = HashMap::new();
+    for q in queries {
+        let lexical = db.bm25_search(q, candidate_pool_size_per_query).unwrap_or_default();
+        for (rowid, rank) in lexical {
+            // Keep the best (lowest) rank for each rowid
+            all_bm25
+                .entry(rowid)
+                .and_modify(|existing| {
+                    if rank < *existing {
+                        *existing = rank;
+                    }
+                })
+                .or_insert(rank);
+        }
+    }
+
+    // Build lexical ranking from merged results (sorted by rank)
+    let mut lexical: Vec<(i64, f32)> = all_bm25.into_iter().collect();
+    lexical.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
     // Collect BM25 candidate rowids
     let bm25_rowids: Vec<i64> = lexical.iter().map(|(rowid, _)| *rowid).collect();
@@ -122,7 +185,7 @@ fn hybrid_search(
         return Ok(Vec::new());
     }
 
-    // Semantic ranking over candidates only
+    // Semantic ranking over candidates only (always against original query embedding)
     let mut semantic: Vec<(i64, f32)> = candidates
         .iter()
         .map(|c| (c.rowid, cosine_similarity(query_embedding, &c.embedding)))

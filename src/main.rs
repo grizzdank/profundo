@@ -65,6 +65,10 @@ enum Commands {
         /// Show N surrounding turns from the original session (implies --full)
         #[arg(long)]
         context: Option<usize>,
+
+        /// Expand query with LLM-generated synonyms/variants before searching
+        #[arg(long)]
+        expand: bool,
     },
 
     /// Extract learnings from sessions
@@ -157,6 +161,7 @@ async fn main() -> Result<()> {
             threshold,
             full,
             context,
+            expand,
         } => {
             let config = profundo::recall::RecallConfig {
                 top_k,
@@ -164,6 +169,7 @@ async fn main() -> Result<()> {
                 semantic_only: false,
                 show_full: full,
                 context_turns: context,
+                expand,
             };
             let display_config = config.clone();
             let results = profundo::recall::search(&paths, &query, config).await?;
