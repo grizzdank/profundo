@@ -106,7 +106,8 @@ pub async fn run(paths: &Paths, config: HarvestConfig) -> Result<HarvestStats> {
         .context("Failed to open learnings file")?;
 
     for (session_id, path) in sessions {
-        print!("{} Harvesting {}... ", "→".blue(), &session_id[..8]);
+        let id_display = if session_id.len() >= 8 { &session_id[..8] } else { &session_id };
+        print!("{} Harvesting {}... ", "→".blue(), id_display);
         std::io::stdout().flush().ok();
 
         match harvest_session(&client, &path, &session_id, &config).await {

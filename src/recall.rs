@@ -197,6 +197,9 @@ pub fn display_results(paths: &Paths, results: &[SearchResult], query: &str, con
         query.italic()
     );
 
+    // Cache parsed sessions to avoid re-parsing the same file per result
+    let mut session_cache: HashMap<String, Vec<crate::session::Turn>> = HashMap::new();
+
     for (i, result) in results.iter().enumerate() {
         let date = result
             .chunk
@@ -214,37 +217,25 @@ pub fn display_results(paths: &Paths, results: &[SearchResult], query: &str, con
             format!("{}%", similarity_pct).red()
         };
 
+        let id_display = {
+            let sid = &result.chunk.session_id;
+            if sid.len() >= 8 { &sid[..8] } else { sid.as_str() }
+        };
+
         println!(
             "{}. {} [{}] ({})",
             (i + 1).to_string().bold(),
             date.cyan(),
-            result.chunk.session_id[..8].to_string().dimmed(),
+            id_display.dimmed(),
             similarity_color
         );
 
         if let Some(context) = config.context_turns {
-            let session_path = paths.sessions_dir.join(format!("{}.jsonl", result.chunk.session_id));
-            if session_path.exists() {
-                match Session::load_turn_range(
-                    &session_path, 
-                    result.chunk.turn_start.try_into().unwrap_or(0), 
-                    result.chunk.turn_end.try_into().unwrap_or(0), 
-                    context
-                ) {
-                    Ok(text) => {
-                        println!("{}", text);
-                    },
-                    Err(e) => {
-                        println!("   {}: {}", "Error loading context".red(), e);
-                        println!("{}", result.chunk.text);
-                    }
-                }
-            } else {
-                println!("   {}: Session file not found, showing saved chunk.", "Warning".yellow());
-                println!("{}", result.chunk.text);
-            }
+            display_with_context(paths, result, context, &mut session_cache);
         } else if config.show_full {
-            println!("{}", result.chunk.text);
+            for line in result.chunk.text.lines() {
+                println!("   {}", line);
+            }
         } else {
             // Truncate and display text preview
             let preview = truncate_text(&result.chunk.text, 300);
@@ -257,6 +248,109 @@ pub fn display_results(paths: &Paths, results: &[SearchResult], query: &str, con
         }
 
         println!();
+    }
+}
+
+/// Display a result with surrounding context turns from the session file.
+/// Uses a session cache to avoid re-parsing the same file multiple times.
+fn display_with_context(
+    paths: &Paths,
+    result: &SearchResult,
+    context: usize,
+    session_cache: &mut HashMap<String, Vec<crate::session::Turn>>,
+) {
+    // Validate turn indices
+    let (turn_start, turn_end) = match (
+        usize::try_from(result.chunk.turn_start),
+        usize::try_from(result.chunk.turn_end),
+    ) {
+        (Ok(s), Ok(e)) => (s, e),
+        _ => {
+            println!(
+                "   {}: invalid turn indices ({}, {}), showing stored chunk.",
+                "Warning".yellow(),
+                result.chunk.turn_start,
+                result.chunk.turn_end
+            );
+            display_chunk_indented(&result.chunk.text);
+            return;
+        }
+    };
+
+    let session_id = &result.chunk.session_id;
+
+    // Load turns from cache or parse session file
+    let turns = match session_cache.get(session_id) {
+        Some(cached) => cached,
+        None => {
+            let session_path = paths.sessions_dir.join(format!("{}.jsonl", session_id));
+            if !session_path.exists() {
+                println!(
+                    "   {}: session file not found, showing stored chunk.",
+                    "Warning".yellow()
+                );
+                display_chunk_indented(&result.chunk.text);
+                return;
+            }
+            match Session::from_file(&session_path) {
+                Ok(session) => {
+                    session_cache.insert(session_id.clone(), session.get_turns());
+                    session_cache.get(session_id).unwrap()
+                }
+                Err(e) => {
+                    println!(
+                        "   {}: failed to parse session: {}, showing stored chunk.",
+                        "Warning".yellow(),
+                        e
+                    );
+                    display_chunk_indented(&result.chunk.text);
+                    return;
+                }
+            }
+        }
+    };
+
+    if turns.is_empty() || turn_start >= turns.len() {
+        println!(
+            "   {}: turn indices out of range (session has {} turns), showing stored chunk.",
+            "Warning".yellow(),
+            turns.len()
+        );
+        display_chunk_indented(&result.chunk.text);
+        return;
+    }
+
+    let start = turn_start.saturating_sub(context);
+    let end = (turn_end + context).min(turns.len());
+    let slice = &turns[start..end];
+
+    if slice.is_empty() {
+        display_chunk_indented(&result.chunk.text);
+        return;
+    }
+
+    // Display with visual markers for matched vs context turns
+    for (j, turn) in slice.iter().enumerate() {
+        let turn_idx = start + j;
+        let is_match = turn_idx >= turn_start && turn_idx < turn_end;
+        let marker = if is_match { "█" } else { "░" };
+
+        for line in turn.user_text.lines() {
+            println!("   {} {}: {}", marker.dimmed(), "User".cyan(), line);
+        }
+        for line in turn.assistant_text.lines() {
+            println!("   {} {}: {}", marker.dimmed(), "Asst".green(), line);
+        }
+        if j < slice.len() - 1 {
+            println!("   {}", "---".dimmed());
+        }
+    }
+}
+
+/// Helper to display chunk text with consistent indentation
+fn display_chunk_indented(text: &str) {
+    for line in text.lines() {
+        println!("   {}", line.dimmed());
     }
 }
 

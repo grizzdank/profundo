@@ -62,8 +62,8 @@ enum Commands {
         #[arg(long)]
         full: bool,
 
-        /// Show N surrounding turns from the original session
-        #[arg(long, conflicts_with = "full")]
+        /// Show N surrounding turns from the original session (implies --full)
+        #[arg(long)]
         context: Option<usize>,
     },
 
@@ -165,8 +165,9 @@ async fn main() -> Result<()> {
                 show_full: full,
                 context_turns: context,
             };
-            let results = profundo::recall::search(&paths, &query, config.clone()).await?;
-            profundo::recall::display_results(&paths, &results, &query, &config);
+            let display_config = config.clone();
+            let results = profundo::recall::search(&paths, &query, config).await?;
+            profundo::recall::display_results(&paths, &results, &query, &display_config);
         }
 
         Commands::Harvest {
@@ -442,7 +443,7 @@ fn show_learnings(paths: &Paths, query: Option<&str>, last: usize) -> Result<()>
             "{} {} [{}]",
             "●".cyan(),
             learning.date.bold(),
-            &learning.session_id[..8].dimmed()
+            if learning.session_id.len() >= 8 { &learning.session_id[..8] } else { &learning.session_id }.dimmed()
         );
 
         if !learning.topics.is_empty() {

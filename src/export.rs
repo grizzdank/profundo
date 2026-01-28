@@ -169,7 +169,7 @@ pub fn write_rollup(paths: &Paths, date: NaiveDate) -> Result<RollupStats> {
             // Session reference
             section.push_str(&format!(
                 "### Session `{}`\n\n",
-                &learning.session_id[..8]
+                if learning.session_id.len() >= 8 { &learning.session_id[..8] } else { &learning.session_id }
             ));
             section.push_str(&format_learning_bullets(learning));
             section.push_str("\n\n");
