@@ -26,8 +26,8 @@ pub struct EmbedConfig {
 impl Default for EmbedConfig {
     fn default() -> Self {
         Self {
-            chunk_size: 3,
-            overlap: 1,
+            chunk_size: 5,
+            overlap: 2,
             force_reprocess: false,
         }
     }

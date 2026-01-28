@@ -225,15 +225,35 @@ impl Session {
                 continue;
             }
 
-            let text = chunk_turns
+            let body_text = chunk_turns
                 .iter()
                 .map(|t| format!("User: {}\n\nAssistant: {}", t.user_text, t.assistant_text))
                 .collect::<Vec<_>>()
                 .join("\n\n---\n\n");
 
+            // Skip tiny chunks — conversational noise (e.g. "ok", "done")
+            if body_text.trim().len() < 100 {
+                continue;
+            }
+
             let timestamp = chunk_turns
                 .first()
                 .and_then(|t| t.timestamp.clone());
+
+            // Prefix with session metadata for retrieval relevance
+            let date = timestamp
+                .as_deref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|dt| dt.date_naive().to_string())
+                .or_else(|| {
+                    self.first_timestamp
+                        .as_ref()
+                        .map(|dt| dt.date_naive().to_string())
+                })
+                .unwrap_or_else(|| "unknown-date".to_string());
+
+            let short_id = if self.id.len() >= 8 { &self.id[..8] } else { &self.id };
+            let text = format!("[{} | {}]\n\n{}", date, short_id, body_text);
 
             chunks.push(TextChunk {
                 session_id: self.id.clone(),

@@ -37,11 +37,11 @@ enum Commands {
         full: bool,
 
         /// Number of conversation turns per chunk
-        #[arg(long, default_value = "3")]
+        #[arg(long, default_value = "5")]
         chunk_size: usize,
 
         /// Overlap between chunks
-        #[arg(long, default_value = "1")]
+        #[arg(long, default_value = "2")]
         overlap: usize,
     },
 
