@@ -50,18 +50,16 @@ pub async fn search(paths: &Paths, query: &str, mut config: RecallConfig) -> Res
     // Embed the query
     let query_embedding = client.embed(query).await?;
 
-    // Load all chunks (we need the full set for brute-force semantic ranking)
-    let chunks = db.load_all_chunks()?;
-
-    if chunks.is_empty() {
-        return Ok(Vec::new());
-    }
-
     if config.semantic_only {
+        // Legacy path: load all chunks, brute-force cosine similarity
+        let chunks = db.load_all_chunks()?;
+        if chunks.is_empty() {
+            return Ok(Vec::new());
+        }
         return semantic_only_search(chunks, &query_embedding, config);
     }
 
-    hybrid_search(&db, chunks, &query_embedding, query, config)
+    hybrid_search(&db, &query_embedding, query, config)
 }
 
 fn semantic_only_search(
@@ -83,15 +81,41 @@ fn semantic_only_search(
     Ok(results)
 }
 
+/// BM25-first hybrid search.
+///
+/// Instead of loading all chunks for brute-force cosine similarity,
+/// we use BM25 to get a candidate set, then only load embeddings for
+/// those candidates. This is O(candidate_pool) instead of O(all_chunks).
+///
+/// At 1,400 chunks this doesn't matter much; at 50k+ it's the difference
+/// between instant and sluggish.
 fn hybrid_search(
     db: &Database,
-    chunks: Vec<StoredChunk>,
     query_embedding: &[f32],
     query: &str,
     config: RecallConfig,
 ) -> Result<Vec<SearchResult>> {
-    // Semantic ranking (brute-force)
-    let mut semantic: Vec<(i64, f32)> = chunks
+    // BM25 candidate pool — cast a wide net
+    let candidate_pool_size = (config.top_k * 40).max(200);
+    let lexical = db.bm25_search(query, candidate_pool_size).unwrap_or_default();
+
+    // Collect BM25 candidate rowids
+    let bm25_rowids: Vec<i64> = lexical.iter().map(|(rowid, _)| *rowid).collect();
+
+    // Load only candidate chunks (embeddings included) for semantic scoring
+    let candidates = if bm25_rowids.is_empty() {
+        // BM25 returned nothing (e.g., query terms not in corpus) — fall back to full scan
+        db.load_all_chunks()?
+    } else {
+        db.load_chunks_by_rowids(&bm25_rowids)?
+    };
+
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Semantic ranking over candidates only
+    let mut semantic: Vec<(i64, f32)> = candidates
         .iter()
         .map(|c| (c.rowid, cosine_similarity(query_embedding, &c.embedding)))
         .filter(|(_, sim)| *sim >= config.threshold)
@@ -99,17 +123,12 @@ fn hybrid_search(
 
     semantic.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-    // Lexical ranking (BM25)
-    let bm25_limit = (config.top_k * 20).max(50);
-    let lexical = db.bm25_search(query, bm25_limit).unwrap_or_default();
-
-    // rowid -> StoredChunk
-    let mut by_rowid: HashMap<i64, StoredChunk> = HashMap::with_capacity(chunks.len());
-    for c in chunks {
+    // Build lookup maps
+    let mut by_rowid: HashMap<i64, StoredChunk> = HashMap::with_capacity(candidates.len());
+    for c in candidates {
         by_rowid.insert(c.rowid, c);
     }
 
-    // rowid -> rank (1-based)
     let mut sem_rank: HashMap<i64, usize> = HashMap::new();
     let mut sem_sim: HashMap<i64, f32> = HashMap::new();
     for (i, (rowid, sim)) in semantic.iter().enumerate() {

@@ -223,7 +223,13 @@ impl Database {
     /// BM25-ranked lexical search using FTS5.
     ///
     /// Returns (rowid, rank) pairs ordered by ascending rank (lower is better).
+    /// Sanitizes query to prevent FTS5 syntax errors from special characters.
     pub fn bm25_search(&self, query: &str, limit: usize) -> Result<Vec<(i64, f32)>> {
+        let safe_query = sanitize_fts_query(query);
+        if safe_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut stmt = self.conn.prepare(
             "SELECT rowid, bm25(chunks_fts) as rank \
              FROM chunks_fts \
@@ -233,13 +239,55 @@ impl Database {
         )?;
 
         let rows = stmt
-            .query_map(params![query, limit as i64], |row| {
+            .query_map(params![safe_query, limit as i64], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, f32>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()
             .context("Failed to run BM25 search")?;
 
         Ok(rows)
+    }
+
+    /// Load chunks by rowids (for pre-filtered semantic search).
+    ///
+    /// Only loads embeddings for the specified rowids instead of the entire table.
+    pub fn load_chunks_by_rowids(&self, rowids: &[i64]) -> Result<Vec<StoredChunk>> {
+        if rowids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build parameterized IN clause
+        let placeholders: Vec<String> = rowids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT rowid, id, session_id, turn_start, turn_end, timestamp, text, embedding \
+             FROM chunks WHERE rowid IN ({})",
+            placeholders.join(",")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = rowids
+            .iter()
+            .map(|r| r as &dyn rusqlite::ToSql)
+            .collect();
+
+        let chunks = stmt
+            .query_map(params.as_slice(), |row| {
+                let embedding_bytes: Vec<u8> = row.get(7)?;
+                Ok(StoredChunk {
+                    rowid: row.get(0)?,
+                    id: row.get(1)?,
+                    session_id: row.get(2)?,
+                    turn_start: row.get(3)?,
+                    turn_end: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    text: row.get(6)?,
+                    embedding: bytes_to_embedding(&embedding_bytes),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("Failed to load chunks by rowids")?;
+
+        Ok(chunks)
     }
 
     /// Get database statistics
@@ -272,6 +320,27 @@ pub struct DbStats {
     pub chunks_count: usize,
     pub sessions_count: usize,
     pub last_processed: Option<String>,
+}
+
+/// Sanitize a user query for FTS5 MATCH.
+///
+/// Wraps each whitespace-delimited token in double quotes to prevent
+/// FTS5 syntax errors from special characters (unbalanced quotes,
+/// boolean operators like AND/OR/NOT/NEAR, parentheses, etc.).
+fn sanitize_fts_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|token| {
+            // Strip any existing quotes to avoid nesting
+            let clean = token.replace('"', "");
+            if clean.is_empty() {
+                return String::new();
+            }
+            format!("\"{}\"", clean)
+        })
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Convert embedding vector to bytes for storage
