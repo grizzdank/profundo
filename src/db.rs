@@ -4,8 +4,11 @@
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::Path;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 
+use crate::harvest::Learning;
 use crate::session::TextChunk;
 
 /// Embedded chunk stored in the database
@@ -25,6 +28,7 @@ pub struct StoredChunk {
 /// Database handle for Profundo
 pub struct Database {
     conn: Connection,
+    learnings_path: Option<PathBuf>,
 }
 
 impl Database {
@@ -39,8 +43,26 @@ impl Database {
         let conn = Connection::open(path)
             .context("Failed to open database")?;
 
-        let db = Self { conn };
+        let db = Self { conn, learnings_path: None };
         db.init_schema()?;
+
+        Ok(db)
+    }
+
+    /// Open or create the database, and (re)build the learnings FTS index
+    pub fn open_with_learnings(path: &Path, learnings_path: &Path) -> Result<Self> {
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .context("Failed to create database directory")?;
+        }
+
+        let conn = Connection::open(path)
+            .context("Failed to open database")?;
+
+        let mut db = Self { conn, learnings_path: Some(learnings_path.to_path_buf()) };
+        db.init_schema()?;
+        db.rebuild_learnings_fts(learnings_path)?;
 
         Ok(db)
     }
@@ -83,6 +105,16 @@ impl Database {
                 INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
                 INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
             END;
+
+            -- Full-text search index for harvested learnings (FTS5)
+            CREATE VIRTUAL TABLE IF NOT EXISTS learnings_fts USING fts5(
+                session_id,
+                topics,
+                summary,
+                facts,
+                decisions,
+                action_items
+            );
 
             -- Processed sessions bookkeeping
             CREATE TABLE IF NOT EXISTS sessions_processed (
@@ -246,6 +278,118 @@ impl Database {
             .context("Failed to run BM25 search")?;
 
         Ok(rows)
+    }
+
+    /// Rebuild the learnings FTS5 table from learnings.jsonl
+    pub fn rebuild_learnings_fts(&mut self, learnings_path: &Path) -> Result<()> {
+        let tx = self.conn.transaction()?;
+
+        tx.execute("DELETE FROM learnings_fts", [])?;
+
+        if !learnings_path.exists() {
+            tx.commit()?;
+            return Ok(());
+        }
+
+        let file = File::open(learnings_path)
+            .with_context(|| format!("Failed to open learnings file: {}", learnings_path.display()))?;
+        let reader = BufReader::new(file);
+
+        let mut stmt = tx.prepare(
+            "INSERT INTO learnings_fts (session_id, topics, summary, facts, decisions, action_items) VALUES (?, ?, ?, ?, ?, ?)"
+        )?;
+
+        for line in reader.lines() {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let learning: Learning = serde_json::from_str(line)
+                .context("Failed to parse learning JSON")?;
+
+            let topics = learning.topics.join(" ");
+            let facts = learning.facts_learned.join(" ");
+            let decisions = learning.decisions.join(" ");
+            let action_items = learning.action_items.join(" ");
+
+            stmt.execute(params![
+                learning.session_id,
+                topics,
+                learning.summary,
+                facts,
+                decisions,
+                action_items,
+            ])?;
+        }
+
+        drop(stmt);
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// BM25-ranked lexical search over harvested learnings.
+    ///
+    /// Returns (Learning, rank) ordered by ascending rank (lower is better).
+    pub fn search_learnings(&self, query: &str, limit: usize) -> Result<Vec<(Learning, f32)>> {
+        let Some(learnings_path) = self.learnings_path.as_deref() else {
+            return Ok(Vec::new());
+        };
+
+        let safe_query = sanitize_fts_query(query);
+        if safe_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, bm25(learnings_fts) as rank \
+             FROM learnings_fts \
+             WHERE learnings_fts MATCH ? \
+             ORDER BY rank \
+             LIMIT ?"
+        )?;
+
+        let rows = stmt
+            .query_map(params![safe_query, limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f32>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("Failed to run learnings BM25 search")?;
+
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if !learnings_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = File::open(learnings_path)
+            .with_context(|| format!("Failed to open learnings file: {}", learnings_path.display()))?;
+        let reader = BufReader::new(file);
+
+        let mut by_session_id: std::collections::HashMap<String, Learning> = std::collections::HashMap::new();
+        for line in reader.lines() {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let learning: Learning = serde_json::from_str(line)
+                .context("Failed to parse learning JSON")?;
+            by_session_id.insert(learning.session_id.clone(), learning);
+        }
+
+        let mut out: Vec<(Learning, f32)> = Vec::new();
+        for (session_id, rank) in rows {
+            if let Some(learning) = by_session_id.remove(&session_id) {
+                out.push((learning, rank));
+            }
+        }
+
+        Ok(out)
     }
 
     /// Load chunks by rowids (for pre-filtered semantic search).

@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
             };
             let display_config = config.clone();
             let results = profundo::recall::search(&paths, &query, config).await?;
-            profundo::recall::display_results(&paths, &results, &query, &display_config);
+            profundo::recall::display_results(&paths, &paths.learnings_path, &results, &query, &display_config);
         }
 
         Commands::Harvest {

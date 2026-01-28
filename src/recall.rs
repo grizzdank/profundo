@@ -5,6 +5,7 @@
 use anyhow::Result;
 use colored::Colorize;
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::db::{Database, StoredChunk};
 use crate::openrouter::OpenRouterClient;
@@ -180,7 +181,13 @@ fn hybrid_search(
 }
 
 /// Display search results in a nice format
-pub fn display_results(paths: &Paths, results: &[SearchResult], query: &str, config: &RecallConfig) {
+pub fn display_results(
+    paths: &Paths,
+    learnings_path: &Path,
+    results: &[SearchResult],
+    query: &str,
+    config: &RecallConfig,
+) {
     if results.is_empty() {
         println!(
             "{} No results found for: {}",
@@ -248,6 +255,42 @@ pub fn display_results(paths: &Paths, results: &[SearchResult], query: &str, con
         }
 
         println!();
+    }
+
+    if let Ok(db) = Database::open_with_learnings(&paths.db_path, learnings_path) {
+        if let Ok(learnings) = db.search_learnings(query, 3) {
+            if !learnings.is_empty() {
+                println!("📝 Related Learnings:\n");
+
+                for (learning, _rank) in learnings {
+                    let id_display = if learning.session_id.len() >= 8 {
+                        &learning.session_id[..8]
+                    } else {
+                        learning.session_id.as_str()
+                    };
+
+                    println!("● {} [{}]", learning.date.cyan(), id_display.dimmed());
+
+                    if !learning.topics.is_empty() {
+                        println!("  Topics: {}", learning.topics.join(", "));
+                    }
+                    if !learning.facts_learned.is_empty() {
+                        println!("  Facts: {}", learning.facts_learned.join(" "));
+                    }
+                    if !learning.decisions.is_empty() {
+                        println!("  Decisions: {}", learning.decisions.join(" "));
+                    }
+                    if !learning.action_items.is_empty() {
+                        println!("  Action Items: {}", learning.action_items.join(" "));
+                    }
+                    if !learning.summary.trim().is_empty() {
+                        println!("  Summary: {}", learning.summary);
+                    }
+
+                    println!();
+                }
+            }
+        }
     }
 }
 
