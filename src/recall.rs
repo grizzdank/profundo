@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use colored::Colorize;
+use std::collections::HashMap;
 
 use crate::db::{Database, StoredChunk};
 use crate::openrouter::OpenRouterClient;
@@ -22,6 +23,9 @@ pub struct RecallConfig {
     pub top_k: usize,
     /// Minimum similarity threshold (0.0 - 1.0)
     pub threshold: f32,
+    /// If true, skip lexical search and use pure semantic recall.
+    /// Not exposed via CLI; can be toggled via PROFUNDO_SEMANTIC_ONLY=1.
+    pub semantic_only: bool,
 }
 
 impl Default for RecallConfig {
@@ -29,42 +33,124 @@ impl Default for RecallConfig {
         Self {
             top_k: 5,
             threshold: 0.3,
+            semantic_only: false,
         }
     }
 }
 
 /// Search for similar content in memory
-pub async fn search(paths: &Paths, query: &str, config: RecallConfig) -> Result<Vec<SearchResult>> {
+pub async fn search(paths: &Paths, query: &str, mut config: RecallConfig) -> Result<Vec<SearchResult>> {
+    if std::env::var("PROFUNDO_SEMANTIC_ONLY").ok().as_deref() == Some("1") {
+        config.semantic_only = true;
+    }
+
     let client = OpenRouterClient::from_env()?;
     let db = Database::open(&paths.db_path)?;
 
     // Embed the query
     let query_embedding = client.embed(query).await?;
 
-    // Load all chunks
+    // Load all chunks (we need the full set for brute-force semantic ranking)
     let chunks = db.load_all_chunks()?;
 
     if chunks.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Compute similarities
+    if config.semantic_only {
+        return semantic_only_search(chunks, &query_embedding, config);
+    }
+
+    hybrid_search(&db, chunks, &query_embedding, query, config)
+}
+
+fn semantic_only_search(
+    chunks: Vec<StoredChunk>,
+    query_embedding: &[f32],
+    config: RecallConfig,
+) -> Result<Vec<SearchResult>> {
     let mut results: Vec<SearchResult> = chunks
         .into_iter()
         .map(|chunk| {
-            let similarity = cosine_similarity(&query_embedding, &chunk.embedding);
+            let similarity = cosine_similarity(query_embedding, &chunk.embedding);
             SearchResult { chunk, similarity }
         })
         .filter(|r| r.similarity >= config.threshold)
         .collect();
 
-    // Sort by similarity (descending)
     results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap());
-
-    // Take top_k
     results.truncate(config.top_k);
-
     Ok(results)
+}
+
+fn hybrid_search(
+    db: &Database,
+    chunks: Vec<StoredChunk>,
+    query_embedding: &[f32],
+    query: &str,
+    config: RecallConfig,
+) -> Result<Vec<SearchResult>> {
+    // Semantic ranking (brute-force)
+    let mut semantic: Vec<(i64, f32)> = chunks
+        .iter()
+        .map(|c| (c.rowid, cosine_similarity(query_embedding, &c.embedding)))
+        .filter(|(_, sim)| *sim >= config.threshold)
+        .collect();
+
+    semantic.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    // Lexical ranking (BM25)
+    let bm25_limit = (config.top_k * 20).max(50);
+    let lexical = db.bm25_search(query, bm25_limit).unwrap_or_default();
+
+    // rowid -> StoredChunk
+    let mut by_rowid: HashMap<i64, StoredChunk> = HashMap::with_capacity(chunks.len());
+    for c in chunks {
+        by_rowid.insert(c.rowid, c);
+    }
+
+    // rowid -> rank (1-based)
+    let mut sem_rank: HashMap<i64, usize> = HashMap::new();
+    let mut sem_sim: HashMap<i64, f32> = HashMap::new();
+    for (i, (rowid, sim)) in semantic.iter().enumerate() {
+        sem_rank.insert(*rowid, i + 1);
+        sem_sim.insert(*rowid, *sim);
+    }
+
+    let mut lex_rank: HashMap<i64, usize> = HashMap::new();
+    for (i, (rowid, _rank)) in lexical.iter().enumerate() {
+        lex_rank.insert(*rowid, i + 1);
+    }
+
+    // Reciprocal Rank Fusion
+    const RRF_K: f32 = 60.0;
+    const FALLBACK_RANK: f32 = 10_000.0;
+
+    let mut fused: Vec<(f32, i64)> = Vec::new();
+
+    for rowid in sem_rank
+        .keys()
+        .chain(lex_rank.keys())
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        let sr = sem_rank.get(&rowid).copied().map(|r| r as f32).unwrap_or(FALLBACK_RANK);
+        let br = lex_rank.get(&rowid).copied().map(|r| r as f32).unwrap_or(FALLBACK_RANK);
+        let score = 1.0 / (RRF_K + sr) + 1.0 / (RRF_K + br);
+        fused.push((score, rowid));
+    }
+
+    fused.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+
+    let mut out: Vec<SearchResult> = Vec::new();
+    for (_score, rowid) in fused.into_iter().take(config.top_k) {
+        if let Some(chunk) = by_rowid.remove(&rowid) {
+            let similarity = sem_sim.get(&rowid).copied().unwrap_or(0.0);
+            out.push(SearchResult { chunk, similarity });
+        }
+    }
+
+    Ok(out)
 }
 
 /// Display search results in a nice format

@@ -148,7 +148,11 @@ async fn main() -> Result<()> {
             top_k,
             threshold,
         } => {
-            let config = profundo::recall::RecallConfig { top_k, threshold };
+            let config = profundo::recall::RecallConfig {
+                top_k,
+                threshold,
+                semantic_only: false,
+            };
             let results = profundo::recall::search(&paths, &query, config).await?;
             profundo::recall::display_results(&results, &query);
         }

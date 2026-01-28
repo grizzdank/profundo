@@ -11,6 +11,8 @@ use crate::session::TextChunk;
 /// Embedded chunk stored in the database
 #[derive(Debug, Clone)]
 pub struct StoredChunk {
+    /// SQLite rowid for joining against FTS results
+    pub rowid: i64,
     pub id: String,
     pub session_id: String,
     pub turn_start: i32,
@@ -61,6 +63,28 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_timestamp ON chunks(timestamp);
 
+            -- Full-text search index for chunks.text (FTS5)
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                text,
+                content=chunks,
+                content_rowid=rowid
+            );
+
+            -- Keep FTS index in sync
+            CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+                INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+                INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+                INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+            END;
+
+            -- Processed sessions bookkeeping
             CREATE TABLE IF NOT EXISTS sessions_processed (
                 session_id TEXT PRIMARY KEY,
                 file_path TEXT NOT NULL,
@@ -76,6 +100,26 @@ impl Database {
             );
             "#,
         ).context("Failed to initialize schema")?;
+
+        // One-time rebuild of FTS index for existing rows
+        let already_built: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM state WHERE key = 'chunks_fts_built'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if already_built.is_none() {
+            self.conn
+                .execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')", [])
+                .context("Failed to rebuild FTS index")?;
+            self.conn.execute(
+                "INSERT OR REPLACE INTO state(key, value) VALUES('chunks_fts_built', '1')",
+                [],
+            )?;
+        }
 
         Ok(())
     }
@@ -153,19 +197,20 @@ impl Database {
     /// Load all chunks for similarity search
     pub fn load_all_chunks(&self) -> Result<Vec<StoredChunk>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, turn_start, turn_end, timestamp, text, embedding FROM chunks"
+            "SELECT rowid, id, session_id, turn_start, turn_end, timestamp, text, embedding FROM chunks"
         )?;
 
         let chunks = stmt
             .query_map([], |row| {
-                let embedding_bytes: Vec<u8> = row.get(6)?;
+                let embedding_bytes: Vec<u8> = row.get(7)?;
                 Ok(StoredChunk {
-                    id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    turn_start: row.get(2)?,
-                    turn_end: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    text: row.get(5)?,
+                    rowid: row.get(0)?,
+                    id: row.get(1)?,
+                    session_id: row.get(2)?,
+                    turn_start: row.get(3)?,
+                    turn_end: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    text: row.get(6)?,
                     embedding: bytes_to_embedding(&embedding_bytes),
                 })
             })?
@@ -173,6 +218,28 @@ impl Database {
             .context("Failed to load chunks")?;
 
         Ok(chunks)
+    }
+
+    /// BM25-ranked lexical search using FTS5.
+    ///
+    /// Returns (rowid, rank) pairs ordered by ascending rank (lower is better).
+    pub fn bm25_search(&self, query: &str, limit: usize) -> Result<Vec<(i64, f32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT rowid, bm25(chunks_fts) as rank \
+             FROM chunks_fts \
+             WHERE chunks_fts MATCH ? \
+             ORDER BY rank \
+             LIMIT ?"
+        )?;
+
+        let rows = stmt
+            .query_map(params![query, limit as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, f32>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("Failed to run BM25 search")?;
+
+        Ok(rows)
     }
 
     /// Get database statistics
