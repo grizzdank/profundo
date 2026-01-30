@@ -1,6 +1,6 @@
 # Profundo
 
-Memory system for Clawdbot - semantic search and learning extraction from session logs.
+Memory system for OpenClaw - semantic search and learning extraction from session logs.
 
 Named for "the deep" (Spanish: *profundo*) - where memories sink and are retrieved from.
 
@@ -10,7 +10,7 @@ Named for "the deep" (Spanish: *profundo*) - where memories sink and are retriev
 - **Recall**: Search past conversations by meaning, not just keywords
 - **Harvest**: Extract learnings (topics, decisions, facts, action items) using AI
 - **Learnings**: Browse and search extracted insights
-- **Export**: Write learnings to markdown for Clawdbot indexing
+- **Export**: Write learnings to markdown for OpenClaw indexing
 - **Rollup**: Daily summary appended to memory logs (learnings + stats)
 - **Stats**: Token usage analytics with per-model breakdown, cache efficiency, and cost trends
 
@@ -33,12 +33,12 @@ Profundo needs an OpenRouter API key. It checks these locations in order:
    export OPENROUTER_API_KEY="sk-or-v1-..."
    ```
 
-2. **Clawdbot config** (automatic for Clawdbot users):
+2. **OpenClaw config** (automatic for OpenClaw users):
    ```
-   ~/.clawdbot/clawdbot.json → models.providers.openrouter.apiKey
+   ~/.openclaw/openclaw.json → models.providers.openrouter.apiKey
    ```
 
-If you're using Clawdbot with OpenRouter configured, no additional setup is needed.
+If you're using OpenClaw with OpenRouter configured, no additional setup is needed.
 
 ## Usage
 
@@ -70,11 +70,11 @@ profundo learnings
 # Search learnings
 profundo learnings "decisions about infrastructure"
 
-# Export learnings to markdown (for Clawdbot indexing)
+# Export learnings to markdown (for OpenClaw indexing)
 profundo export
 
 # Export to custom path
-profundo export -o ~/clawd/memory/insights.md
+profundo export -o ~/openclaw/memory/insights.md
 
 # Write daily rollup to memory log (defaults to yesterday)
 profundo rollup
@@ -94,13 +94,13 @@ profundo stats --since 2026-01-01 --until 2026-01-15
 
 ## Directory Structure
 
-Profundo reads the workspace path from your Clawdbot config (`~/.clawdbot/clawdbot.json` → `agents.defaults.workspace`). If not configured, it defaults to `~/clawd`.
+Profundo reads the workspace path from your OpenClaw config (`~/.openclaw/openclaw.json` → `agents.defaults.workspace`). If not configured, it defaults to `~/openclaw`.
 
 ```
 ~/<workspace>/memory/
 ├── profundo.sqlite    # Embeddings database
 ├── learnings.jsonl    # Extracted insights (internal)
-├── learnings.md       # Exported markdown (Clawdbot can index)
+├── learnings.md       # Exported markdown (OpenClaw can index)
 ├── YYYY-MM-DD.md      # Daily logs with ## Profundo sections
 └── .profundo-cursor   # Processing state
 ```
@@ -108,7 +108,7 @@ Profundo reads the workspace path from your Clawdbot config (`~/.clawdbot/clawdb
 ## How It Works
 
 ### Embedding Pipeline
-1. Reads Clawdbot session logs from `~/.clawdbot/agents/main/sessions/`
+1. Reads OpenClaw session logs from `~/.openclaw/agents/main/sessions/`
 2. Chunks conversations by turns (user + assistant pairs)
 3. Generates embeddings via OpenRouter (text-embedding-3-small)
 4. Stores in SQLite for fast similarity search
@@ -125,7 +125,7 @@ Profundo reads the workspace path from your Clawdbot config (`~/.clawdbot/clawdb
 3. Appends to `learnings.jsonl`
 
 ### Stats & Cost Tracking
-Token usage and costs are read directly from Clawdbot's session logs — not calculated with hardcoded rates. Clawdbot logs costs based on API pricing at the time of each request.
+Token usage and costs are read directly from OpenClaw's session logs — not calculated with hardcoded rates. OpenClaw logs costs based on API pricing at the time of each request.
 
 **OAuth users:** If you're using Anthropic OAuth (usage limits instead of per-token billing), the costs shown represent *equivalent API rates*, not actual charges. This is still useful for understanding relative usage and cost efficiency across models.
 
@@ -153,7 +153,7 @@ The rollup command writes a `## Profundo` section to yesterday's daily log with:
 - Token usage stats (input/output, cache rate, cost)
 - Harvested learnings (topics, decisions, facts, action items)
 
-## Integration with Clawdbot
+## Integration with OpenClaw
 
 Add to your workspace's `TOOLS.md`:
 ```markdown
