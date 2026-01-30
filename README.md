@@ -49,11 +49,14 @@ profundo embed
 # Force reprocess all sessions
 profundo embed --full
 
-# Search memory
+# Search memory (includes conversation chunks + harvested learnings)
 profundo recall "what did we discuss about oauth"
 
 # Search with more results
 profundo recall "token efficiency" -n 10
+
+# Expand query with AI-generated related terms
+profundo recall "auth flow" --expand
 
 # Extract learnings from recent sessions
 profundo harvest
@@ -111,9 +114,10 @@ Profundo reads the workspace path from your Clawdbot config (`~/.clawdbot/clawdb
 4. Stores in SQLite for fast similarity search
 
 ### Recall Search
-1. Embeds your query
+1. Embeds your query (optionally expanded with `--expand` for better coverage)
 2. Computes cosine similarity against all stored chunks
-3. Returns top-k most similar conversation segments
+3. Searches harvested learnings for matching insights
+4. Returns combined results: conversation segments + relevant learnings
 
 ### Harvest Pipeline
 1. Reads session transcripts
